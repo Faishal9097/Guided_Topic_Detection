@@ -1,2 +1,0 @@
-Preprocessing/data/processed/**/*.json filter=lfs diff=lfs merge=lfs -text
-Preprocessing/data/processed/**/*.txt filter=lfs diff=lfs merge=lfs -text
