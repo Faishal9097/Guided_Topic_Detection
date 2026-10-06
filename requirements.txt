@@ -1,0 +1,10 @@
+pandas
+numpy
+networkx
+scikit-learn
+requests
+gdown
+tqdm
+jupyter
+ipykernel
+python-dateutil
