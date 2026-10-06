@@ -16,6 +16,13 @@ env/
 # Raw datasets
 # =========================
 Preprocessing/data/raw/
+
+
+# =========================
+# Processed datasets
+# =========================
+Preprocessing/data/processed/
+
 # =========================
 # IDE
 # =========================
