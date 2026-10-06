@@ -40,7 +40,7 @@ def load_features(path):
         z = np.load(path, allow_pickle=False)
         if {"indices", "indptr", "data"} <= set(z.files):      # scipy sparse matrix
             try:
-                import scipy.sparse as sp
+                import scipy.sparse as sp  # type: ignore[import-not-found]
             except ImportError:
                 raise SystemExit("This feature file is a scipy sparse matrix. Install scipy first:  pip install scipy")
             return sp.load_npz(path).tocsr()
