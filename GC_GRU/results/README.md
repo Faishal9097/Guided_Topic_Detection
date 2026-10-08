@@ -26,7 +26,7 @@ Download the required files from Google Drive:
 
 ```text
 GC_GRU/results/
-``` markdown
+
 5. Preserve the original filenames and folder structure.
 Important
 Some files in this directory may include:
