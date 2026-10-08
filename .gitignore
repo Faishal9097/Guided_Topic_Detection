@@ -23,6 +23,12 @@ Preprocessing/data/raw/
 # =========================
 Preprocessing/data/processed/
 
+
+#==========================
+#Ag2vec data output
+#==========================
+Ag2vec_Grp_Representation/data_output/Output/
+Ag2vec_Grp_Representation/scripts/stance_sample_labeled.csv
 # =========================
 # IDE
 # =========================
