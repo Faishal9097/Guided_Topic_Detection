@@ -88,8 +88,10 @@ TEMPLATED_DUPLICATE_PAIR_RATIO_THRESHOLD = 0.25
 ONE_SIDED_SENTIMENT_SHARE_THRESHOLD = 0.70
 EMOTIONAL_LANGUAGE_SHARE_THRESHOLD = 0.30
 
-MIN_NODES_FOR_STRUCTURE = 3
-MIN_NODES_FOR_NARRATIVE = 3
+MIN_NODES_FOR_STRUCTURE = 10
+MIN_NODES_FOR_NARRATIVE = 10
+STRUCTURE_PERCENTILE = 90
+TEMPLATED_PERCENTILE = 90
 CONTENT_SAMPLE_SIZE = 30  # cap pairwise-similarity cost on large graphs
 
 EMOTIONAL_DIRECTIVE_LEXICON_EN = [
@@ -237,11 +239,35 @@ def evaluate_narrative(graph_id, node_graph_id, content_features, raw_text_map):
     }
 
 
+def raw_structure(graph_id, node_graph_id, edges_by_src):
+    idx = np.where(node_graph_id == graph_id)[0]
+    if len(idx) < MIN_NODES_FOR_STRUCTURE:
+        return None
+    deg = [len(edges_by_src.get(n, [])) for n in idx]
+    tot = sum(deg)
+    return (max(deg) / tot) if tot > 0 else None
+
+
+def raw_templated(graph_id, node_graph_id, content_features):
+    idx = np.where(node_graph_id == graph_id)[0]
+    if len(idx) < MIN_NODES_FOR_NARRATIVE:
+        return None
+    if len(idx) > CONTENT_SAMPLE_SIZE:
+        idx = np.random.choice(idx, CONTENT_SAMPLE_SIZE, replace=False)
+    X = content_features[idx].toarray()
+    nrm = np.linalg.norm(X, axis=1, keepdims=True)
+    nrm[nrm == 0] = 1
+    X = X / nrm
+    n = len(idx)
+    return float(np.triu(X @ X.T, k=1).sum() / (n * (n - 1) / 2))      # mean pairwise cosine
+
+
+
 def process_dataset(name: str):
     print("\n" + "=" * 60)
     print(f"PROCESSING: {name.upper()}")
     print("=" * 60)
-
+    np.random.seed(RANDOM_SEED)
     folder = BASE_DIR / name
     edges = load_edge_list(folder)
     labels = np.load(folder / "graph_labels.npy")
@@ -267,11 +293,24 @@ def process_dataset(name: str):
 
     num_graphs = len(labels)
     results = []
-
+    shares = [raw_structure(g, node_graph_id, edges_by_src) for g in range(num_graphs)]
+    sims = [raw_templated(g, node_graph_id, content_features) for g in range(num_graphs)]
+    sv = np.array([s for s in shares if s is not None])
+    tv = np.array([s for s in sims if s is not None])
+    thr_s = float(np.percentile(sv, STRUCTURE_PERCENTILE))
+    thr_t = float(np.percentile(tv, TEMPLATED_PERCENTILE))
+    print(f"  out-degree share: n={len(sv)} median={np.median(sv):.3f} P{STRUCTURE_PERCENTILE}={thr_s:.3f} max={sv.max():.3f}")
+    print(f"  mean cosine:      n={len(tv)} median={np.median(tv):.3f} P{TEMPLATED_PERCENTILE}={thr_t:.3f} max={tv.max():.3f}")
+    
     print(f"Computing dimension flags for {num_graphs} graphs...")
     for graph_id in range(num_graphs):
-        structure = evaluate_structure(graph_id, node_graph_id, edges_by_src)
-        narrative = evaluate_narrative(graph_id, node_graph_id, content_features, raw_text_map)
+        s_ev, t_ev = shares[graph_id] is not None, sims[graph_id] is not None
+        s_flag = bool(s_ev and shares[graph_id] > thr_s)
+        n_flag = bool(t_ev and sims[graph_id] > thr_t)
+        structure = {"evaluable": s_ev, "abnormal_account_pattern": None, "synchronized_burst": None,
+                     "centralized_propagation": s_flag, "out_degree_share": shares[graph_id] or 0.0, "flag": s_flag}
+        narrative = {"evaluable": t_ev, "one_sided_sentiment": None, "emotional_directive_language": None,
+                     "templated_duplicate_content": n_flag, "mean_pairwise_cosine": sims[graph_id] or 0.0, "flag": n_flag}
 
         # Propagation dynamics: not evaluable at all for UPFD (no timestamps).
         dynamics = {

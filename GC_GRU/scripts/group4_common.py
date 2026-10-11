@@ -8,7 +8,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import (accuracy_score, average_precision_score, balanced_accuracy_score,precision_recall_fscore_support, roc_auc_score)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 POOLED = ("count", "vec", "mut")
@@ -140,9 +140,11 @@ def metrics(y, p):
     y = np.asarray(y)
     pred = (np.asarray(p) >= 0.5).astype(int)
     pr, rc, f1, _ = precision_recall_fscore_support(y, pred, labels=[1, 0], zero_division=0)
+    ap = float(average_precision_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
     auc = float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
-    return {"acc": float(accuracy_score(y, pred)), "prec": float(pr[0]), "rec": float(rc[0]),
-            "f1": float(f1[0]), "f1_nonguided": float(f1[1]), "macro_f1": float(f1.mean()), "auc": auc}
+    return {"acc": float(accuracy_score(y, pred)), "bal_acc": float(balanced_accuracy_score(y, pred)),
+            "prec": float(pr[0]), "rec": float(rc[0]), "f1": float(f1[0]),
+            "f1_nonguided": float(f1[1]), "macro_f1": float(f1.mean()), "auc": auc, "pr_auc": ap}
 
 
 @torch.no_grad()
@@ -198,10 +200,29 @@ def run_seeds(F_raw, y, split, cfg, seeds, unit="gru", T=None, keep_state=False)
     return [train_eval(Fn, y, split, cfg, s, unit, keep_state) for s in seeds], mu, sd
 
 
-def summarize(runs, part="test", keys=("acc", "prec", "rec", "f1", "macro_f1", "auc")):
+def summarize(runs, part="test", keys=("acc", "bal_acc", "prec", "rec", "f1", "macro_f1", "auc", "pr_auc")):
     return {k: (float(np.mean([r[part][k] for r in runs])), float(np.std([r[part][k] for r in runs])))
             for k in keys}
 
 
 def fmt(summary):
     return "  ".join(f"{k}={m:.3f}±{s:.3f}" for k, (m, s) in summary.items())
+
+def cv_splits(y, n_splits=5, repeats=3, seed=0, val_frac=0.1):
+    """Repeated stratified K-fold over ALL topics. Yields split arrays ('train'/'val'/'test') for train_eval."""
+    from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
+    rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=repeats, random_state=seed)
+    for tr_all, te in rskf.split(np.zeros(len(y)), y):
+        tr, va = train_test_split(tr_all, test_size=val_frac, stratify=y[tr_all], random_state=seed)
+        sp = np.full(len(y), "none", dtype="<U5")
+        sp[tr], sp[va], sp[te] = "train", "val", "test"
+        yield sp
+
+
+def run_cv(F_raw, y, cfg, unit="gru", T=None, n_splits=5, repeats=3, seed=0):
+    runs = []
+    for i, sp in enumerate(cv_splits(y, n_splits, repeats, seed)):
+        r, _, _ = run_seeds(F_raw, y, sp, cfg, [i], unit, T)
+        runs.append(r[0])
+        print(f"  fold {i + 1}: test auc={r[0]['test']['auc']:.3f} pr_auc={r[0]['test']['pr_auc']:.3f}", flush=True)
+    return runs

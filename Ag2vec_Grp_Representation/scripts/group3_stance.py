@@ -22,7 +22,7 @@ Empty-text interactions (pure reposts, ~46% of Weibo interactions) get EMPTY_P: 
 That value is an assumption - state it in the report.
 """
 from __future__ import annotations
-
+from sklearn.metrics import classification_report, confusion_matrix      # was: only classification_report
 import pickle
 from typing import Callable, Dict, List, Optional
 
@@ -33,11 +33,21 @@ EMPTY_P = np.array([0.1, 0.1, 0.8], np.float32)
 
 
 # ----------------------------------------------------------------------------- data / features
-def load_labeled(path):
+def load_labeled(path, claim_only: bool = False):
     import pandas as pd
     df = pd.read_csv(path, encoding="utf-8-sig").fillna("")
     df["comment"] = df["comment"].astype(str).str.strip()
+    if claim_only and "source_is_claim" in df.columns:
+        df = df[df["source_is_claim"].astype(int) == 1].reset_index(drop=True)
     return df
+
+
+def check_overlap(df, wb):
+    """Labelled topics that are NOT in the current train split (possible leakage after a resplit)."""
+    tr = {str(t) for t in wb.topic_ids('train')}
+    bad = [t for t in df["topic_id"].astype(str) if t not in tr]
+    print(f"{len(bad)} of {len(df)} labelled topics are outside the train split")
+    return bad
 
 
 def sbert_embedder(model_name: str = "paraphrase-multilingual-MiniLM-L12-v2", device: Optional[str] = None,
@@ -83,6 +93,7 @@ def tune_and_report(X, y, Cs=(0.1, 0.3, 1.0, 3.0, 10.0)):
         if best is None or sc["macro_f1"] > best[1]["macro_f1"]:
             best = (C, sc, pred)
     print(classification_report(y, best[2], digits=2))
+    print(confusion_matrix(y, best[2], labels=LABELS)) 
     return {"C": best[0], **best[1]}
 
 

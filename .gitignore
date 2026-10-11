@@ -69,8 +69,7 @@ Ag2vec_Grp_Representation/scripts/stance_sample_labeled.csv
 # ------------------------------------------------------------
 # GC-GRU generated results
 # ------------------------------------------------------------
-GC_GRU/results/*
-!GC_GRU/results/README.md
+GC_GRU/results/LOG/*
 
 
 # ------------------------------------------------------------
@@ -85,3 +84,6 @@ Group_Detection_Tracking/data_output/*
 # ------------------------------------------------------------
 Preprocessing/data/*
 !Preprocessing/data/README.md
+Preprocessing/scripts/stance_sample_labeled.csv
+
+Changes.txt

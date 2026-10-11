@@ -18,52 +18,48 @@ VAL_RATIO = 0.1
 TEST_RATIO = 0.1
 
 
-def stratified_split(topics: list, label_key: str = "guided_label"):
-    """
-    Splits topics into train/val/test, stratified by label_key,
-    so each split preserves the overall guided/nonguided ratio.
-    """
+def _tid(t):
+    return str(t.get("topic_id", t.get("post_id", t.get("graph_id"))))
+
+
+def stratified_split(topics: list, label_key: str = "original_label", keep_in_train=frozenset()):
     by_label = {}
-    for topic in topics:
-        label = topic.get(label_key, "unknown")
-        by_label.setdefault(label, []).append(topic)
-
+    for t in topics:
+        lab = t.get(label_key)
+        if lab is None:
+            raise KeyError(f"topic {_tid(t)} has no '{label_key}'; carry it through topic construction first")
+        by_label.setdefault(lab, []).append(t)
     train, val, test = [], [], []
-
     for label, items in by_label.items():
-        shuffled = items[:]
-        random.shuffle(shuffled)
-
-        n = len(shuffled)
-        n_train = int(n * TRAIN_RATIO)
+        n = len(items)
         n_val = int(n * VAL_RATIO)
-        # remainder goes to test, so all items are accounted for
-        n_test = n - n_train - n_val
-
-        train.extend(shuffled[:n_train])
-        val.extend(shuffled[n_train:n_train + n_val])
-        test.extend(shuffled[n_train + n_val:])
-
+        n_test = n - int(n * TRAIN_RATIO) - n_val
+        forced = [t for t in items if _tid(t) in keep_in_train]
+        free = [t for t in items if _tid(t) not in keep_in_train]
+        random.shuffle(free)
+        val.extend(free[:n_val])
+        test.extend(free[n_val:n_val + n_test])
+        train.extend(free[n_val + n_test:] + forced)
     return train, val, test
 
 
-def process_file(input_path: Path, output_prefix: Path, label_key: str = "guided_label"):
+
+def process_file(input_path: Path, output_prefix: Path, label_key: str = "original_label", keep_in_train=frozenset()):
     print(f"\nProcessing: {input_path.name}")
     with open(input_path, "r", encoding="utf-8") as f:
         topics = json.load(f)
 
-    train, val, test = stratified_split(topics, label_key)
+    train, val, test = stratified_split(topics, label_key, keep_in_train)
 
     print(f"  Total topics: {len(topics)}")
     print(f"  Train: {len(train)} ({len(train)/len(topics)*100:.1f}%)")
     print(f"  Val:   {len(val)} ({len(val)/len(topics)*100:.1f}%)")
     print(f"  Test:  {len(test)} ({len(test)/len(topics)*100:.1f}%)")
 
+    from collections import Counter
     for split_name, split_data in [("train", train), ("val", val), ("test", test)]:
-        guided_count = sum(1 for t in split_data if t.get(label_key) == "guided")
-        nonguided_count = len(split_data) - guided_count
-        print(f"    {split_name}: guided={guided_count}, nonguided={nonguided_count}")
-
+        print(f"    {split_name}: {dict(Counter(t.get(label_key) for t in split_data))}")
+        print(f"    {split_name} guided_label (secondary): {dict(Counter(t.get('guided_label') for t in split_data))}")
     # Save each split
     with open(f"{output_prefix}_train.json", "w", encoding="utf-8") as f:
         json.dump(train, f, ensure_ascii=False, indent=2)
@@ -77,9 +73,11 @@ def process_file(input_path: Path, output_prefix: Path, label_key: str = "guided
 
 def main():
     # --- Weibo ---
+    import pandas as pd
+    keep = set(pd.read_csv("scripts/stance_sample_labeled.csv", encoding="utf-8-sig")["topic_id"].astype(str))
     process_file(
         PROCESSED_DIR / "weibo_ced" / "topics_time_sliced.json",
-        PROCESSED_DIR / "weibo_ced" / "topics_split",
+        PROCESSED_DIR / "weibo_ced" / "topics_split", keep_in_train=keep
     )
 
     # --- FakeNewsNet: Politifact ---

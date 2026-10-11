@@ -15,7 +15,7 @@ The actual result files are **not stored in this GitHub repository** because som
 Download the required files from Google Drive:
 
 **Google Drive:**  
-[PASTE GC-GRU RESULTS DRIVE LINK HERE]
+[\[Drive\]](https://drive.google.com/drive/folders/1GoW-87P6nG34oYzqH-0JgMpgpcGYzDlQ?usp=sharing)
 
 ## Instructions
 

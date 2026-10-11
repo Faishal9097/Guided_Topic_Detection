@@ -16,7 +16,7 @@ import time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPTS = os.path.join(ROOT, "Ag2vec_Grp_Representation", "scripts")
 OUT = os.path.join(ROOT, "Ag2vec_Grp_Representation", "data_output")
-
+MODE = "clean"   # set to "full" or "clean" AFTER reading the step 3a ablation result
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
@@ -46,7 +46,7 @@ def main():
     print("[2/4] Loading stance probabilities...")
 
     stance_path = os.path.join(
-        OUT, "stance_probs_weibo.pkl"
+        OUT, "stance_probs_v2.pkl"
     )
 
     if not os.path.exists(stance_path):
@@ -98,7 +98,8 @@ def main():
             tid,
             wb,
             steps[tid],
-            probs[tid]
+            probs[tid],
+            mode=MODE
         )
 
         if i % 100 == 0 or i == total:
@@ -224,7 +225,7 @@ def main():
         K=30,
         slot_mode="stable",
         dim=64,
-        stance={}
+        stance=None
     )
 
     # ------------------------------------------------------------
@@ -255,7 +256,7 @@ def main():
         K=30,
         slot_mode="stable",
         dim=64,
-        stance={}
+        stance=None
     )
 
     # ------------------------------------------------------------

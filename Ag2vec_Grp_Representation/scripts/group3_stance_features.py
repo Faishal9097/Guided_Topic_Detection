@@ -43,8 +43,16 @@ def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def topic_features(tid: str, wb, steps_t: List[dict], probs_t: Dict[str, np.ndarray]) -> List[dict]:
-    """Per slice: {gid: {"ptilde": (3,), "ein": (3,), "eout": (3,), "has_data": bool, "size": int}}"""
+def topic_features(tid: str, wb, steps_t: List[dict], probs_t: Dict[str, np.ndarray], mode: str = "full") -> List[dict]:
+    """Per slice: {gid: {"ptilde": (3,), "ein": (3,), "eout": (3,), "has_data": bool, "size": int}}.
+
+    mode="full" preserves the original features. mode="clean" excludes empty-text
+    interactions when estimating stance and removes Act/TopicHeat from Eout for
+    the leakage ablation.
+    """
+    clean = (mode == "clean")
+    if mode not in ("full", "clean"):
+        raise ValueError("mode must be 'full' or 'clean'")
     slices = sorted(wb.sliced[tid]["time_slices"], key=lambda s: s["slice_index"])
     gslices = wb.groups[tid]["slices"]
     cum: List[dict] = []
@@ -66,7 +74,11 @@ def topic_features(tid: str, wb, steps_t: List[dict], probs_t: Dict[str, np.ndar
             mem = set(members)
             g_cum = [i for i in cum if i["uid"] in mem]
             g_new = [i for i in new if i["uid"] in mem]
-            use = g_new if g_new else g_cum
+            if clean:      # Empty reposts can leak repost share into P~.
+                txt = lambda L: [i for i in L if (i["text"] or "").strip()]
+                use = txt(g_new) or txt(g_cum)
+            else:
+                use = g_new if g_new else g_cum
             num, den = np.zeros(K3), 0.0
             for i in use:
                 p = probs_t.get(i["mid"])
@@ -83,7 +95,7 @@ def topic_features(tid: str, wb, steps_t: List[dict], probs_t: Dict[str, np.ndar
             ta = np.array([n_user.get(u, 0) / n_max for u in members], float)
             ta_infl = float((w * ta * iv).sum())
             slice_out[gid] = {"ptilde": ptilde, "ein": ptilde * ta_infl,            # Eq. 27 (aggregated by w)
-                              "eout": ptilde * act * heat,                          # Eq. 28
+                              "eout": (ptilde.copy() if clean else ptilde * act * heat),  # Eq. 28; clean drops Act and heat
                               "has_data": bool(has), "size": len(members)}
         out.append(slice_out)
     return out
@@ -126,4 +138,21 @@ def mut_vectors(feats: Dict[str, List[dict]], rho: dict, omega: Tuple[float, flo
                                 _sigmoid(sopo + snone - ssup),                           # Eq. 37
                                 _sigmoid(snone + o1 * ssup + o2 * sopo)], np.float32)    # Eq. 38
                 res[(tid, t, gid)] = {"mut": mut, "ptilde": a["ptilde"].astype(np.float32), "S": S.astype(np.float32)}
+    return res
+
+
+def stance_extra(feats):
+    """Return {(tid, t, gid): [entropy, polarization, d_sup, d_opo]} from P~ only."""
+    res = {}
+    for tid, sl in feats.items():
+        for t, groups in enumerate(sl):
+            for gid, a in groups.items():
+                p = np.clip(a["ptilde"], 1e-9, 1.0)
+                prev = sl[t - 1].get(gid) if t > 0 else None
+                d = (a["ptilde"] - prev["ptilde"]) if prev is not None else np.zeros(K3)
+                res[(tid, t, gid)] = np.array(
+                    [float(-(p * np.log(p)).sum()), float(abs(p[0] - p[1])),
+                     float(d[0]), float(d[1])],
+                    dtype=np.float32,
+                )
     return res

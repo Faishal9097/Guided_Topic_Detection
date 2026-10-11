@@ -9,7 +9,10 @@ import json
 import numpy as np
 from scipy.stats import ttest_rel
 
-from group4_common import (DEFAULT_CFG, build_features_arrays, fmt, load_data, run_seeds, summarize)
+from group4_common import (
+    DEFAULT_CFG, build_features_arrays, fmt, load_data,
+    run_seeds, run_cv, summarize
+)
 
 ABLATION = [("size", ["size"]), ("count", ["count"]), ("vec", ["vec"]), ("mut", ["mut"]),
             ("vec+mut", ["vec", "mut"]), ("struct", ["struct"]), ("struct+mut", ["struct", "mut"]),
@@ -34,6 +37,7 @@ def main():
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--epochs", type=int, default=DEFAULT_CFG["epochs"])
     ap.add_argument("--class-weight", action="store_true")
+    ap.add_argument("--cv", action="store_true")
     ap.add_argument("--ref", default=None)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -67,12 +71,27 @@ def main():
         key = tuple(b)
         if key not in cache:
             cache[key] = build_features_arrays(d["X"], d["mask"], b, struct)
-        runs, _, _ = run_seeds(cache[key], y, split, cfg, seeds, unit, T)
+        if a.cv:
+            runs = run_cv(cache[key], y, cfg, unit, T)
+        else:
+            runs, _, _ = run_seeds(cache[key], y, split, cfg, seeds, unit, T)
         results[name] = runs
         print(f"[{name:15s}] {fmt(summarize(runs))}   (epochs*: {[r['best_epoch'] for r in runs]})", flush=True)
 
     ref = a.ref or (configs[-1][0] if a.suite == "early" else
                     ("vec+mut" if "vec+mut" in results else configs[0][0]))
+    if a.cv:
+        print(f"\n== paired t-test over {len(results[ref])} CV folds vs '{ref}' (folds overlap, so p-values are optimistic) ==")
+        for name, runs in results.items():
+            if name == ref:
+                continue
+            for m in ("auc", "pr_auc"):
+                x = [r["test"][m] for r in runs]
+                z = [r["test"][m] for r in results[ref]]
+                print(f"{name:15s} {m} diff={np.mean(np.subtract(x, z)):+.3f} p={ttest_rel(x, z).pvalue:.3f}")
+        with open(a.out or f"results_{a.suite}_cv.json", "w") as f:
+            json.dump({n: summarize(r) for n, r in results.items()}, f, indent=1)
+        return
     print(f"\n== significance vs reference '{ref}' (test set, {a.seeds} seeds) ==")
     yt = y[split == "test"]
     pr = np.mean([r["test_prob"] for r in results[ref]], 0)

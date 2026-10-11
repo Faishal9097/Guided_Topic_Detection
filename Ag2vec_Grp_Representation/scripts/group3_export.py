@@ -28,12 +28,17 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 
-def meta_from(data) -> Dict[str, Tuple[int, str]]:
-    """{topic_id: (label, split)} from WeiboData / FakeNewsNetData (guided = 1)."""
+POS = {"rumor", "fake"}          # primary target: rumor/fake = 1
+
+
+def meta_from(data, target: str = "original_label") -> Dict[str, Tuple[int, str]]:
+    """{topic_id: (label, split)}. Default target = original_label (rumor/fake = 1)."""
     out = {}
     for tid in data.topic_ids():
         rec = data.groups[tid]
-        out[tid] = (1 if rec["guided_label"] == "guided" else 0, data.split_of(tid) or "none")
+        y = (1 if rec["guided_label"] == "guided" else 0) if target == "guided_label" \
+            else (1 if rec["original_label"] in POS else 0)
+        out[tid] = (y, data.split_of(tid) or "none")
     return out
 
 

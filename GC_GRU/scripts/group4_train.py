@@ -9,7 +9,10 @@ import json
 import numpy as np
 import torch
 
-from group4_common import (DEFAULT_CFG, build_features_arrays, fmt, load_data, run_seeds, summarize)
+from group4_common import (
+    DEFAULT_CFG, build_features_arrays, fmt, load_data,
+    run_seeds, run_cv, summarize
+)
 
 
 def main():
@@ -28,6 +31,7 @@ def main():
     ap.add_argument("--dropout", type=float, default=DEFAULT_CFG["dropout"])
     ap.add_argument("--fc", type=int, default=DEFAULT_CFG["fc"])
     ap.add_argument("--class-weight", action="store_true")
+    ap.add_argument("--cv", action="store_true")
     ap.add_argument("--save-model", default=None)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -43,6 +47,10 @@ def main():
           "guided share:", round(float(y.mean()), 3))
     F = build_features_arrays(d["X"], d["mask"], blocks, struct)
     print("features", F.shape, "blocks", blocks, "unit", a.unit)
+    if a.cv:
+        runs = run_cv(F, y, cfg, a.unit, a.T)
+        print("CV TEST (5x3 repeated stratified, all topics):", fmt(summarize(runs, "test")))
+        return
     runs, mu, sd = run_seeds(F, y, split, cfg, list(range(a.seeds)), a.unit, a.T,
                              keep_state=bool(a.save_model))
     for r in runs:

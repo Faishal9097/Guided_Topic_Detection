@@ -92,9 +92,8 @@ MIN_TIMESTAMPS_FOR_DYNAMICS = 10
 # substring lexicon — documented as a heuristic proxy, per Table I's
 # "strongly emotional or directive language" sub-component).
 EMOTIONAL_DIRECTIVE_LEXICON = [
-    "转发", "扩散", "必须", "一定要", "求", "快看", "震惊", "愤怒", "可怕",
-    "太惨", "谴责", "强烈", "呼吁", "赶紧", "大家注意", "警惕", "曝光",
-    "人渣", "禽兽", "天理", "良心", "！！", "!!", "？？", "必转",
+    "扩散", "必须", "一定要", "快看", "震惊", "愤怒", "可怕", "太惨", "谴责", "强烈",
+    "呼吁", "赶紧", "大家注意", "警惕", "曝光", "人渣", "禽兽", "天理", "良心", "必转",
 ]
 
 TEMPLATED_PHRASES = {"转发微博", "转发微博。", "轉發微博。", "轉發微博"}
@@ -197,25 +196,15 @@ def compute_raw_structure_metrics(replies: list) -> dict:
     }
 
 
-def compute_global_thresholds(raw_metrics_list: list) -> dict:
-    """Derive the two percentile-based hard thresholds from the dataset's
-    own distribution (only over topics with enough replies to be
-    meaningful)."""
+def compute_global_thresholds(raw_metrics_list: list, raw_dyn_list: list) -> dict:
     eligible = [m for m in raw_metrics_list if m["n_replies"] >= MIN_REPLIES_FOR_STRUCTURE]
-
     repeat_counts = [m["max_repeat_count"] for m in eligible]
     burst_counts = [m["max_burst_distinct_accounts"] for m in eligible]
-
-    abnormal_account_threshold = (
-        float(np.percentile(repeat_counts, ABNORMAL_ACCOUNT_PERCENTILE)) if repeat_counts else 0.0
-    )
-    sync_burst_threshold = (
-        float(np.percentile(burst_counts, SYNC_BURST_PERCENTILE)) if burst_counts else 0.0
-    )
-
+    shares = [d["peak_share"] for d in raw_dyn_list if d["evaluable"]]
     return {
-        "abnormal_account_threshold": abnormal_account_threshold,
-        "sync_burst_threshold": sync_burst_threshold,
+        "abnormal_account_threshold": float(np.percentile(repeat_counts, ABNORMAL_ACCOUNT_PERCENTILE)) if repeat_counts else 0.0,
+        "sync_burst_threshold": float(np.percentile(burst_counts, SYNC_BURST_PERCENTILE)) if burst_counts else 0.0,
+        "explosive_peak_share_threshold": float(np.percentile(shares, 90)) if shares else 1.0,
         "n_topics_used_for_thresholds": len(eligible),
     }
 
@@ -242,89 +231,67 @@ def evaluate_structure(replies: list, raw: dict, thresholds: dict) -> dict:
     }
 
 
+def _substantive(texts):
+    """Drop empty reposts and templated repost phrases before any narrative statistic."""
+    out = []
+    for t in texts:
+        s = (t or "").strip()
+        if s and s not in TEMPLATED_PHRASES:
+            out.append(s)
+    return out
+
+
 def evaluate_narrative(replies: list) -> dict:
-    texts = [r.get("text", "") for r in replies]
-    non_empty_texts = [t for t in texts if t and t.strip()]
+    texts = _substantive([r.get("text", "") for r in replies])
     evaluable = len(texts) >= MIN_REPLIES_FOR_NARRATIVE
-
-    one_sided = False
-    emotional = False
-    templated = False
-
+    one_sided = emotional = templated = False
     if evaluable:
-        # (a) one-sided sentiment bias
-        polarities = [p for p in (sentiment_polarity(t) for t in non_empty_texts) if p is not None]
-        if len(polarities) >= MIN_REPLIES_FOR_NARRATIVE:
-            frac_pos = sum(1 for p in polarities if p > 0.6) / len(polarities)
-            frac_neg = sum(1 for p in polarities if p < 0.4) / len(polarities)
-            one_sided = max(frac_pos, frac_neg) >= ONE_SIDED_SENTIMENT_SHARE_THRESHOLD
-
-        # (b) emotional / directive language
-        emo_count = sum(
-            1 for t in texts if any(marker in t for marker in EMOTIONAL_DIRECTIVE_LEXICON)
-        )
-        emotional = (emo_count / len(texts)) > EMOTIONAL_LANGUAGE_SHARE_THRESHOLD
-
-        # (c) templated / duplicate text (exact match on normalized text,
-        # plus the known low-effort templated-repost phrase set)
-        normalized = [normalize_text(t) if t.strip() else "" for t in texts]
-        normalized = [t if t else "__EMPTY__" for t in normalized]
-        for i, t in enumerate(texts):
-            if t.strip() in TEMPLATED_PHRASES:
-                normalized[i] = "__TEMPLATED__"
-        counts = Counter(normalized)
-        duplicate_count = sum(c for c in counts.values() if c > 1)
-        templated_ratio = duplicate_count / len(texts)
-        templated = templated_ratio > TEMPLATED_DUPLICATE_RATIO_THRESHOLD
-
+        pol = [p for p in (sentiment_polarity(t) for t in texts) if p is not None]
+        if len(pol) >= MIN_REPLIES_FOR_NARRATIVE:
+            fp = sum(p > 0.6 for p in pol) / len(pol)
+            fn = sum(p < 0.4 for p in pol) / len(pol)
+            one_sided = max(fp, fn) >= ONE_SIDED_SENTIMENT_SHARE_THRESHOLD
+        emo = sum(any(m in t for m in EMOTIONAL_DIRECTIVE_LEXICON) for t in texts)
+        emotional = (emo / len(texts)) > EMOTIONAL_LANGUAGE_SHARE_THRESHOLD
+        counts = Counter(normalize_text(t) for t in texts)
+        dup = sum(c for c in counts.values() if c > 1)
+        templated = (dup / len(texts)) > TEMPLATED_DUPLICATE_RATIO_THRESHOLD
     return {
         "evaluable": evaluable,
         "sentiment_backend": SENTIMENT_BACKEND,
-        "one_sided_sentiment": one_sided,
-        "emotional_directive_language": emotional,
-        "templated_duplicate_text": templated,
+        "one_sided_sentiment": bool(one_sided),
+        "emotional_directive_language": bool(emotional),
+        "templated_duplicate_text": bool(templated),
         "flag": bool(one_sided or emotional or templated),
     }
 
 
-def evaluate_dynamics(replies: list) -> dict:
-    timestamps = sorted(parse_date(r.get("date")) for r in replies if parse_date(r.get("date")))
-    evaluable = len(timestamps) >= MIN_TIMESTAMPS_FOR_DYNAMICS
+def _hourly_bins(replies):
+    ts = sorted(parse_date(r.get("date")) for r in replies if parse_date(r.get("date")))
+    if len(ts) < MIN_TIMESTAMPS_FOR_DYNAMICS:
+        return None
+    t0 = ts[0]
+    hrs = [(t - t0).total_seconds() / 3600 for t in ts]
+    bins = np.zeros(int(max(hrs)) + 2)
+    for h in hrs:
+        bins[int(h)] += 1
+    return bins
 
-    multiple_peaks = False
-    explosive_growth = False
 
-    if evaluable:
-        t0 = timestamps[0]
-        hours = [(t - t0).total_seconds() / 3600 for t in timestamps]
-        max_hour = int(max(hours)) + 1
-        bins = np.zeros(max_hour + 1)
-        for h in hours:
-            bins[int(h)] += 1
+def compute_raw_dynamics(replies: list) -> dict:
+    bins = _hourly_bins(replies)
+    if bins is None:
+        return {"evaluable": False, "peak_share": 0.0, "n_peaks": 0}
+    peaks, _ = find_peaks(bins, prominence=max(2.0, 0.2 * bins.max()))
+    return {"evaluable": True, "peak_share": float(bins.max() / bins.sum()), "n_peaks": int(len(peaks))}
 
-        # (a) multiple diffusion peaks
-        if len(bins) >= 3:
-            peaks, _ = find_peaks(bins)
-            multiple_peaks = len(peaks) > 1
 
-        # (b) explosive growth: any bin exceeds EXPLOSIVE_GROWTH_MULTIPLE x
-        # the topic's own baseline (median of non-zero bins)
-        nonzero = bins[bins > 0]
-        baseline = float(np.median(nonzero)) if len(nonzero) else 0.0
-        baseline = max(baseline, 1.0)
-        explosive_growth = bool(bins.max() > EXPLOSIVE_GROWTH_MULTIPLE * baseline)
-
-    return {
-        "evaluable": evaluable,
-        "multiple_peaks": multiple_peaks,
-        "explosive_growth": explosive_growth,
-        # No external real-world-event calendar is available for this
-        # dataset, so this sub-component is explicitly marked as not
-        # evaluable rather than defaulted to False. It does not
-        # contribute to `flag` below.
-        "event_misalignment": None,
-        "flag": bool(multiple_peaks or explosive_growth),
-    }
+def evaluate_dynamics(raw_dyn: dict, thresholds: dict) -> dict:
+    ev = raw_dyn["evaluable"]
+    mp = ev and raw_dyn["n_peaks"] >= 2
+    eg = ev and raw_dyn["peak_share"] > thresholds["explosive_peak_share_threshold"]
+    return {"evaluable": ev, "multiple_peaks": bool(mp), "explosive_growth": bool(eg),
+            "event_misalignment": None, "flag": bool(mp or eg)}
 
 
 def label_topic(replies: list) -> dict:
@@ -346,17 +313,18 @@ def main():
 
     all_topics_raw = []  # [(post_id, original_label, replies, raw_structure_metrics)]
     for post_id, replies in rumor_repost.items():
-        raw = compute_raw_structure_metrics(replies)
-        all_topics_raw.append((post_id, "rumor", replies, raw))
+        all_topics_raw.append((post_id, "rumor", replies,
+                               compute_raw_structure_metrics(replies), compute_raw_dynamics(replies)))
     for post_id, replies in non_rumor_repost.items():
-        raw = compute_raw_structure_metrics(replies)
-        all_topics_raw.append((post_id, "non-rumor", replies, raw))
+        all_topics_raw.append((post_id, "non-rumor", replies,
+                               compute_raw_structure_metrics(replies), compute_raw_dynamics(replies)))
+
 
     print(f"Total topics: {len(all_topics_raw)}")
 
     # Derive the two data-driven hard thresholds once, from the whole
     # dataset's own distribution (NOT from the paper's label ratio).
-    thresholds = compute_global_thresholds([raw for _, _, _, raw in all_topics_raw])
+    thresholds = compute_global_thresholds([r[3] for r in all_topics_raw], [r[4] for r in all_topics_raw])
     print("\nData-derived thresholds:")
     print(f"  abnormal_account_threshold (repeat posts by one uid in a topic, "
           f"P{ABNORMAL_ACCOUNT_PERCENTILE}): {thresholds['abnormal_account_threshold']:.2f}")
@@ -366,10 +334,10 @@ def main():
           f">= {MIN_REPLIES_FOR_STRUCTURE} replies)")
 
     all_posts = []
-    for post_id, original_label, replies, raw in all_topics_raw:
+    for post_id, original_label, replies, raw, rdyn in all_topics_raw:
         structure = evaluate_structure(replies, raw, thresholds)
         narrative = evaluate_narrative(replies)
-        dynamics = evaluate_dynamics(replies)
+        dynamics = evaluate_dynamics(rdyn, thresholds)
 
         flags = [structure["flag"], narrative["flag"], dynamics["flag"]]
         guided = sum(flags) >= 2
