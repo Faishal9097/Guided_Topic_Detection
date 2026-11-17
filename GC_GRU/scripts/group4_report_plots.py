@@ -343,7 +343,7 @@ def main():
 
     js = jload(res / "results_temporal.json")
     if js:
-        rows = rows_of(js)
+        rows = rows_of(as_suite(js))
         h, b = metric_table(rows)
         md += ["## Temporal unit comparison (Weibo)\n", write_table("table_temporal", h, b, out), "\n"]
         plot_temporal(rows, out, "fig_temporal.png")
@@ -353,7 +353,7 @@ def main():
             plot_significance(js, out, "fig_significance_temporal.png", "Temporal unit significance")
     js = jload(res / "results_early.json")
     if js:
-        rows = rows_of(js)
+        rows = rows_of(as_suite(js))
         h, b = metric_table(rows)
         md += ["## Early detection (Weibo)\n", write_table("table_early", h, b, out), "\n"]
         plot_early(rows, share("weibo"), out, "fig_early_detection.png")
